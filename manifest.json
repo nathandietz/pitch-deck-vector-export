@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Pitch Vector Capture",
+  "name": "Pitch Deck Vector Export",
   "description": "Exports public Pitch.com decks to a single PDF using the browser print pipeline.",
   "version": "0.3.6",
   "icons": {
