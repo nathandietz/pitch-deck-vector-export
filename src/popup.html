@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Pitch Vector Capture</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main class="popup-shell">
+      <header class="hero">
+        <img class="brand-mark" src="../assets/icons/icon-128.png" alt="" aria-hidden="true">
+        <div>
+          <p class="eyebrow">Pitch.com exporter</p>
+          <h1>Vector PDF capture</h1>
+          <p class="lede">Export the open deck as a crisp, selectable-text PDF.</p>
+        </div>
+      </header>
+
+      <section class="range-panel" aria-labelledby="rangeTitle">
+        <div class="section-heading">
+          <div>
+            <h2 id="rangeTitle">Slide range</h2>
+            <p>Choose the first and last slide to include.</p>
+          </div>
+          <span class="format-pill">PDF</span>
+        </div>
+
+        <div class="range-row">
+          <label class="field">
+            <span>Start</span>
+            <input id="startSlide" type="number" min="1" value="1" inputmode="numeric">
+          </label>
+
+          <label class="field">
+            <span>End</span>
+            <input id="endSlide" type="number" min="1" placeholder="Auto" inputmode="numeric">
+          </label>
+        </div>
+      </section>
+
+      <button id="exportButton" type="button">
+        <span>Export PDF</span>
+      </button>
+
+      <p id="status" class="status" role="status">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span class="status-message">Open a Pitch deck, then export.</span>
+      </p>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

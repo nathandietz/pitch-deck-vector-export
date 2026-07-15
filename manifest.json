@@ -1,0 +1,40 @@
+{
+  "manifest_version": 3,
+  "name": "Pitch Vector Capture",
+  "description": "Exports public Pitch.com decks to a single PDF using the browser print pipeline.",
+  "version": "0.3.6",
+  "icons": {
+    "16": "assets/icons/icon-16.png",
+    "32": "assets/icons/icon-32.png",
+    "48": "assets/icons/icon-48.png",
+    "128": "assets/icons/icon-128.png",
+    "512": "assets/icons/icon-512.png"
+  },
+  "action": {
+    "default_icon": {
+      "16": "assets/icons/icon-16.png",
+      "32": "assets/icons/icon-32.png",
+      "48": "assets/icons/icon-48.png",
+      "128": "assets/icons/icon-128.png"
+    },
+    "default_popup": "src/popup.html",
+    "default_title": "Export Pitch deck"
+  },
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://pitch.com/v/*",
+        "https://pitch.com/embed/*",
+        "https://pitch.com/public/*"
+      ],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "host_permissions": ["https://pitch.com/*"],
+  "permissions": ["activeTab", "debugger", "downloads", "scripting"]
+}
