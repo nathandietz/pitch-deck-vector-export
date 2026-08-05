@@ -70,7 +70,29 @@
       throw new Error("Could not read the Pitch deck slide count.");
     }
 
-    return { currentSlide, totalSlides };
+    return { currentSlide, totalSlides, stateKey: getCurrentSlideStateKey() };
+  }
+
+  // A Pitch build keeps the same slide index but changes the rendered slide DOM. Hash the
+  // active slide so the background worker can distinguish a build from a no-op at the deck edge.
+  function getCurrentSlideStateKey() {
+    const activeSlide = document.querySelector(
+      "[data-test-id='current-visible-slide'] .slide[data-slide-index], #current-visible-slide .slide[data-slide-index]"
+    );
+    if (!activeSlide) {
+      return null;
+    }
+
+    return hashString(activeSlide.outerHTML);
+  }
+
+  function hashString(value) {
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619);
+    }
+    return (hash >>> 0).toString(16);
   }
 
   // Pitch marks the visible slide with a zero-based data attribute; convert it to user-facing numbering.

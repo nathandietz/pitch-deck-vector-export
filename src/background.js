@@ -3,6 +3,7 @@ import { isSupportedPitchDeckUrl } from "./shared.js";
 const DEBUGGER_VERSION = "1.3";
 const ADVANCE_SETTLE_MS = 850;
 const NAVIGATION_SETTLE_MS = 100;
+const MAX_CAPTURE_STATES = 1000;
 
 // Route popup requests to the small background actions that need extension-only permissions.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -47,7 +48,6 @@ async function exportPitchTab(tabId, startSlide, endSlide) {
   const totalSlides = deckInfo.totalSlides;
   const rangeStart = clampInteger(startSlide, 1, totalSlides, 1);
   const rangeEnd = clampInteger(endSlide, rangeStart, totalSlides, totalSlides);
-  const slidesToCapture = rangeEnd - rangeStart + 1;
 
   const target = { tabId };
   let attached = false;
@@ -62,15 +62,41 @@ async function exportPitchTab(tabId, startSlide, endSlide) {
     await navigateToSlide(tabId, target, rangeStart, totalSlides);
 
     let slideCount = 0;
+    let captureStates = 0;
 
-    for (let attempt = 0; attempt < slidesToCapture; attempt += 1) {
+    // A forward key can reveal a Pitch build without changing currentSlide. Keep advancing
+    // until a key produces no new rendered state, rather than assuming one key equals one page.
+    while (captureStates < MAX_CAPTURE_STATES) {
+      const currentInfo = await requestTab(tabId, { type: "PVC_GET_DECK_INFO" });
+      if (currentInfo.currentSlide > rangeEnd) {
+        break;
+      }
+
       const capture = await requestTab(tabId, { type: "PVC_CAPTURE_CURRENT" });
       slideCount = capture.slideCount;
+      captureStates += 1;
 
-      if (attempt < slidesToCapture - 1) {
-        await advanceSlide(target);
-        await sleep(ADVANCE_SETTLE_MS);
+      await advanceSlide(target);
+      await sleep(ADVANCE_SETTLE_MS);
+
+      const nextInfo = await requestTab(tabId, { type: "PVC_GET_DECK_INFO" });
+      if (nextInfo.currentSlide > rangeEnd) {
+        break;
       }
+
+      const sameSlide = nextInfo.currentSlide === currentInfo.currentSlide;
+      const sameRenderedState = currentInfo.stateKey && nextInfo.stateKey
+        ? currentInfo.stateKey === nextInfo.stateKey
+        : sameSlide;
+
+      // If Pitch did not move to another slide or build, this is the end of the deck (or range).
+      if (sameSlide && sameRenderedState) {
+        break;
+      }
+    }
+
+    if (captureStates >= MAX_CAPTURE_STATES) {
+      throw new Error("The deck did not reach a stable end while exporting.");
     }
 
     if (slideCount === 0) {
@@ -100,7 +126,7 @@ async function exportPitchTab(tabId, startSlide, endSlide) {
       throw new Error("The browser did not return PDF data.");
     }
 
-    const filename = makeFilename(tab.title || "pitch-deck", rangeStart, rangeStart + slideCount - 1, totalSlides);
+    const filename = makeFilename(tab.title || "pitch-deck", rangeStart, rangeEnd, totalSlides);
     await chrome.downloads.download({
       url: `data:application/pdf;base64,${pdf.data}`,
       filename,
@@ -111,7 +137,7 @@ async function exportPitchTab(tabId, startSlide, endSlide) {
       slideCount,
       filename,
       startSlide: rangeStart,
-      endSlide: rangeStart + slideCount - 1,
+      endSlide: rangeEnd,
       totalSlides
     };
   } finally {
