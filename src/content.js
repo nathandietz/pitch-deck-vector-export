@@ -7,9 +7,8 @@
   const TARGET_ASPECT_RATIO = 16 / 9;
   const PAGE_WIDTH_INCHES = 16;
   const PAGE_HEIGHT_INCHES = 9;
-  const DEFAULT_PAGE_DELAY_MS = 1000;
-  const CSS_TRANSITION_DELAY_MS = 1000;
-  const VIDEO_FRAME_DELAY_MS = 100;
+  const SLIDE_STABILITY_OBSERVATION_MS = 1000;
+  const DEFERRED_VIDEO_DISCOVERY_MS = 100;
   const VIDEO_READY_TIMEOUT_MS = 5000;
   const SELECTOR = Object.freeze({
     stage: "[data-test-id='current-visible-slide'], #current-visible-slide",
@@ -153,7 +152,10 @@
   // Wait for finite CSS/Web Animations on the visible slide. The timeout protects the
   // exporter from looping animations or animations Pitch leaves unresolved.
   async function waitForSlideAnimations(maxWaitMs) {
-    const configuredDelayMs = Math.max(100, Number.parseInt(maxWaitMs, 10) || DEFAULT_PAGE_DELAY_MS);
+    const configuredDelayMs = Math.max(
+      100,
+      Number.parseInt(maxWaitMs, 10) || SLIDE_STABILITY_OBSERVATION_MS
+    );
     const safetyTimeoutMs = Math.max(30000, configuredDelayMs);
     const startedAt = performance.now();
     const stage = getStage();
@@ -162,7 +164,6 @@
     let sawVisualChange = false;
     let previousVisualKey = null;
     let stableSince = startedAt;
-    const minimumObservationMs = CSS_TRANSITION_DELAY_MS;
     const stableWindowMs = 100;
 
     while (performance.now() - startedAt < safetyTimeoutMs) {
@@ -185,7 +186,7 @@
       // catches fades driven by inline styles or JavaScript rather than Web Animations.
       if (
         !animations.length &&
-        now - startedAt >= minimumObservationMs &&
+        now - startedAt >= SLIDE_STABILITY_OBSERVATION_MS &&
         now - stableSince >= stableWindowMs
       ) {
         break;
@@ -198,7 +199,7 @@
     // deferred element time to appear, then wait until it has decoded a drawable frame.
     const video = await waitForReadyVideos(
       stage,
-      sawAnimation || sawVisualChange ? VIDEO_FRAME_DELAY_MS : 0
+      sawAnimation || sawVisualChange ? DEFERRED_VIDEO_DISCOVERY_MS : 0
     );
 
     return {

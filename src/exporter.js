@@ -1,9 +1,9 @@
 import { CONTENT_MESSAGE, isSupportedPitchDeckUrl } from "./shared.js";
 
 const DEBUGGER_VERSION = "1.3";
-const DEFAULT_PAGE_DELAY_MS = 1000;
+const DEFAULT_MOVE_DELAY_MS = 1000;
 const BACKWARD_NAVIGATION_SETTLE_MS = 250;
-const VIDEO_FRAME_CAPTURE_MS = 100;
+const VIDEO_SCREENSHOT_DELAY_MS = 100;
 const MAX_CAPTURE_STATES = 1000;
 const MIN_MOVE_DELAY_MS = 100;
 const MAX_MOVE_DELAY_MS = 10000;
@@ -43,7 +43,7 @@ export async function exportPitchTab({
     moveDelayMs,
     MIN_MOVE_DELAY_MS,
     MAX_MOVE_DELAY_MS,
-    DEFAULT_PAGE_DELAY_MS
+    DEFAULT_MOVE_DELAY_MS
   );
   const target = { tabId };
   let attached = false;
@@ -68,7 +68,7 @@ export async function exportPitchTab({
     let videoFrames = await captureVisibleVideoFrames(
       tabId,
       target,
-      overrideDelay ? moveDelay : VIDEO_FRAME_CAPTURE_MS
+      overrideDelay ? moveDelay : VIDEO_SCREENSHOT_DELAY_MS
     );
     if (!movedToStart) {
       await waitForSlideSettled(tabId, moveDelay, overrideDelay);
@@ -77,7 +77,7 @@ export async function exportPitchTab({
       videoFrames = await captureVisibleVideoFrames(
         tabId,
         target,
-        overrideDelay ? moveDelay : VIDEO_FRAME_CAPTURE_MS
+        overrideDelay ? moveDelay : VIDEO_SCREENSHOT_DELAY_MS
       );
     }
 
@@ -105,7 +105,7 @@ export async function exportPitchTab({
       videoFrames = await captureVisibleVideoFrames(
         tabId,
         target,
-        overrideDelay ? moveDelay : VIDEO_FRAME_CAPTURE_MS
+        overrideDelay ? moveDelay : VIDEO_SCREENSHOT_DELAY_MS
       );
       await waitForSlideSettled(tabId, moveDelay, overrideDelay);
       // Slides that insert or decode video after their transition get a settled-state retry.
@@ -113,7 +113,7 @@ export async function exportPitchTab({
         videoFrames = await captureVisibleVideoFrames(
           tabId,
           target,
-          overrideDelay ? moveDelay : VIDEO_FRAME_CAPTURE_MS
+          overrideDelay ? moveDelay : VIDEO_SCREENSHOT_DELAY_MS
         );
       }
 
@@ -244,7 +244,7 @@ async function navigateToSlide(
   target,
   slideNumber,
   totalSlides,
-  forwardSettleMs = DEFAULT_PAGE_DELAY_MS,
+  forwardSettleMs = DEFAULT_MOVE_DELAY_MS,
   overrideDelay = false
 ) {
   for (let attempt = 0; attempt <= totalSlides + 2; attempt += 1) {
@@ -286,7 +286,11 @@ async function waitForSlideSettled(tabId, delayMs, overrideDelay) {
 
 // Capture only the live video rectangles. The rest of the slide continues through the
 // vector print pipeline, while these PNGs bypass media/CORS and cloned-video limitations.
-async function captureVisibleVideoFrames(tabId, target, captureDelayMs = VIDEO_FRAME_CAPTURE_MS) {
+async function captureVisibleVideoFrames(
+  tabId,
+  target,
+  captureDelayMs = VIDEO_SCREENSHOT_DELAY_MS
+) {
   const captureMode = await requestTab(tabId, { type: CONTENT_MESSAGE.ENTER_VIDEO_CAPTURE_MODE });
   if (!captureMode?.videoCount) {
     await requestTab(tabId, { type: CONTENT_MESSAGE.EXIT_VIDEO_CAPTURE_MODE }).catch(() => {});
