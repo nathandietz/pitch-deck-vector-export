@@ -135,6 +135,22 @@ p {
   gap: 7px;
 }
 
+.checkbox-field {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.checkbox-field input {
+  width: 16px;
+  min-height: 16px;
+  margin: 0;
+  accent-color: var(--purple);
+}
+
 input {
   width: 100%;
   min-height: 42px;

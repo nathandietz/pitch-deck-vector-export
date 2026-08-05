@@ -38,7 +38,11 @@
       case "PVC_GET_DECK_INFO":
         return getDeckInfo();
       case "PVC_CAPTURE_CURRENT":
-        return captureCurrentSlide();
+        return captureCurrentSlide(message.videoFrames || []);
+      case "PVC_GET_VIDEO_RECTS":
+        return getVideoRects();
+      case "PVC_WAIT_FOR_ANIMATIONS":
+        return waitForSlideAnimations(message.maxWaitMs);
       case "PVC_ENTER_PRINT_MODE":
         return enterPrintMode();
       case "PVC_EXIT_PRINT_MODE":
@@ -47,6 +51,127 @@
       default:
         return { ok: false };
     }
+  }
+
+  // Wait for finite CSS/Web Animations on the visible slide. The timeout protects the
+  // exporter from looping animations or animations Pitch leaves unresolved.
+  async function waitForSlideAnimations(maxWaitMs) {
+    const timeoutMs = Math.max(100, Number.parseInt(maxWaitMs, 10) || 1000);
+    const startedAt = performance.now();
+    const stage = document.querySelector("[data-test-id='current-visible-slide'], #current-visible-slide");
+    const hasVideo = Boolean(stage?.querySelector("video"));
+    const hasAnimatedGif = containsAnimatedGif(stage);
+    const initialAnimations = getActiveFiniteAnimations(stage);
+
+    // Video frames are captured separately from the live page. If the slide has no CSS
+    // transition to wait for, capture that frame immediately instead of consuming the
+    // fallback/max delay intended for GIF playback or unresolved transitions.
+    if (hasVideo && !initialAnimations.length) {
+      return { waitedMs: 0, sawAnimation: false, hasAnimatedMedia: true };
+    }
+
+    // GIF playback is independent of CSS/Web Animations and has no browser-level
+    // "finished" signal. Give it the complete configured window before capturing.
+    if (hasAnimatedGif && !hasVideo) {
+      await sleep(timeoutMs);
+      return { waitedMs: timeoutMs, sawAnimation: false, hasAnimatedMedia: true };
+    }
+
+    let sawAnimation = false;
+    let previousVisualKey = null;
+    let stableSince = startedAt;
+    const minimumObservationMs = Math.min(180, timeoutMs);
+    const stableWindowMs = 100;
+
+    while (performance.now() - startedAt < timeoutMs) {
+      const animations = getActiveFiniteAnimations(stage);
+      if (animations.length) {
+        sawAnimation = true;
+      }
+
+      const visualKey = getVisualStateKey(stage);
+      const now = performance.now();
+      if (visualKey !== previousVisualKey) {
+        previousVisualKey = visualKey;
+        stableSince = now;
+      }
+
+      // Require a short stable window after the animation has had time to start. This also
+      // catches fades driven by inline styles or JavaScript rather than Web Animations.
+      if (
+        !animations.length &&
+        now - startedAt >= minimumObservationMs &&
+        now - stableSince >= stableWindowMs
+      ) {
+        break;
+      }
+
+      await sleep(50);
+    }
+
+    return {
+      waitedMs: Math.round(performance.now() - startedAt),
+      sawAnimation,
+      hasAnimatedMedia: false
+    };
+  }
+
+  function containsAnimatedGif(root) {
+    if (!root) {
+      return false;
+    }
+
+    const imageSources = [...root.querySelectorAll("img, source")];
+    if (imageSources.some((element) => {
+      const source = element.currentSrc || element.src || element.getAttribute("src") || "";
+      return /\.gif(?:[?#]|$)/i.test(source);
+    })) {
+      return true;
+    }
+
+    return [root, ...root.querySelectorAll("*")].some((element) =>
+      /url\([^)]*\.gif(?:[?#][^)]*)?\)/i.test(getComputedStyle(element).backgroundImage || "")
+    );
+  }
+
+  function getActiveFiniteAnimations(root) {
+    const getAnimations = root?.getAnimations?.bind(root) || document.getAnimations?.bind(document);
+    if (!getAnimations) {
+      return [];
+    }
+
+    return getAnimations({ subtree: true }).filter((animation) => {
+      if (!["running", "pending"].includes(animation.playState)) {
+        return false;
+      }
+
+      const iterations = animation.effect?.getComputedTiming?.().iterations;
+      return iterations !== Infinity;
+    });
+  }
+
+  function getVisualStateKey(root) {
+    if (!root) {
+      return "";
+    }
+
+    const elements = [root, ...root.querySelectorAll("*")];
+    const visualState = elements.slice(0, 2000).map((element) => {
+      const style = getComputedStyle(element);
+      return [
+        style.opacity,
+        style.visibility,
+        style.transform,
+        style.filter,
+        style.clipPath
+      ].join(",");
+    }).join(";");
+
+    return hashString(visualState);
+  }
+
+  function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
   // Start every export from a clean slate, including any previous temporary print DOM.
@@ -151,7 +276,32 @@
   }
 
   // Wait for the page to settle, clone the active slide, and keep the clone for the final print document.
-  async function captureCurrentSlide() {
+  function getVideoRects() {
+    const slide = findCurrentSlide();
+    if (!slide) {
+      return [];
+    }
+
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    return [...slide.element.querySelectorAll("video")].map((video, index) => {
+      const rect = video.getBoundingClientRect();
+      const left = Math.max(0, rect.left);
+      const top = Math.max(0, rect.top);
+      const right = Math.min(viewportWidth, rect.right);
+      const bottom = Math.min(viewportHeight, rect.bottom);
+
+      return {
+        index,
+        x: left,
+        y: top,
+        width: Math.max(0, right - left),
+        height: Math.max(0, bottom - top)
+      };
+    }).filter((rect) => rect.width > 1 && rect.height > 1);
+  }
+
+  async function captureCurrentSlide(videoFrames) {
     await document.fonts?.ready.catch(() => {});
     await waitForImages();
 
@@ -160,7 +310,7 @@
       throw new Error("Could not identify the active slide.");
     }
 
-    const croppedSlide = cloneForPrint(slide.element, slide.rect);
+    const croppedSlide = cloneForPrint(slide.element, slide.rect, videoFrames);
     state.slides.push({
       node: croppedSlide.node,
       width: croppedSlide.width,
@@ -348,10 +498,10 @@
   }
 
   // Clone the slide and normalize its box so Chromium can print it without page-positioning side effects.
-  function cloneForPrint(source, rect) {
+  function cloneForPrint(source, rect, videoFrames = []) {
     const clone = source.cloneNode(true);
     copyCanvasContent(source, clone);
-    copyVideoFrames(source, clone);
+    copyVideoFrames(source, clone, videoFrames);
     inlineComputedStyles(source, clone);
     normalizePitchPrecisionClone(source, clone, rect);
 
@@ -566,14 +716,47 @@
     });
   }
 
-  // Use video posters when available so a printed PDF does not contain blank video elements.
-  function copyVideoFrames(sourceRoot, cloneRoot) {
+  // Snapshot the currently rendered video frame because cloned video elements can restart
+  // or render blank in the temporary print document. Fall back to the poster if the frame
+  // is not readable (for example, because the media is cross-origin protected).
+  function copyVideoFrames(sourceRoot, cloneRoot, videoFrames = []) {
     const sourceVideos = sourceRoot.querySelectorAll("video");
     const cloneVideos = cloneRoot.querySelectorAll("video");
+    const capturedFrames = new Map(videoFrames.map((frame) => [frame.index, frame.data]));
     sourceVideos.forEach((sourceVideo, index) => {
       const cloneVideo = cloneVideos[index];
       if (!cloneVideo) {
         return;
+      }
+
+      const capturedFrame = capturedFrames.get(index);
+      if (capturedFrame) {
+        const image = document.createElement("img");
+        image.src = `data:image/png;base64,${capturedFrame}`;
+        image.style.cssText = cloneVideo.style.cssText;
+        cloneVideo.replaceWith(image);
+        return;
+      }
+
+      const width = sourceVideo.videoWidth || sourceVideo.clientWidth;
+      const height = sourceVideo.videoHeight || sourceVideo.clientHeight;
+
+      if (sourceVideo.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA && width > 0 && height > 0) {
+        try {
+          const canvas = document.createElement("canvas");
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext("2d").drawImage(sourceVideo, 0, 0, width, height);
+          const image = document.createElement("img");
+          image.src = canvas.toDataURL("image/png");
+          image.width = width;
+          image.height = height;
+          image.style.cssText = cloneVideo.style.cssText;
+          cloneVideo.replaceWith(image);
+          return;
+        } catch {
+          // Fall through to the poster fallback below.
+        }
       }
 
       if (sourceVideo.poster) {
