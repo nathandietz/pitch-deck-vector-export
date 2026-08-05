@@ -306,33 +306,44 @@ async function waitForSlideSettled(tabId, maxWaitMs, automaticDelay) {
 // Capture only the live video rectangles. The rest of the slide continues through the
 // vector print pipeline, while these PNGs bypass media/CORS and cloned-video limitations.
 async function captureVisibleVideoFrames(tabId, target) {
-  const videos = await requestTab(tabId, { type: "PVC_GET_VIDEO_RECTS" });
-  const frames = [];
-
-  for (const video of videos || []) {
-    try {
-      const screenshot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
-        format: "png",
-        fromSurface: true,
-        captureBeyondViewport: false,
-        clip: {
-          x: video.x,
-          y: video.y,
-          width: video.width,
-          height: video.height,
-          scale: 1
-        }
-      });
-
-      if (screenshot?.data) {
-        frames.push({ index: video.index, data: screenshot.data });
-      }
-    } catch {
-      // The content script's current-frame/poster fallback handles this video.
-    }
+  const captureMode = await requestTab(tabId, { type: "PVC_ENTER_VIDEO_CAPTURE_MODE" });
+  if (!captureMode?.videoCount) {
+    await requestTab(tabId, { type: "PVC_EXIT_VIDEO_CAPTURE_MODE" }).catch(() => {});
+    return [];
   }
 
-  return frames;
+  try {
+    await sleep(100);
+    const videos = await requestTab(tabId, { type: "PVC_GET_VIDEO_RECTS" });
+    const frames = [];
+
+    for (const video of videos || []) {
+      try {
+        const screenshot = await chrome.debugger.sendCommand(target, "Page.captureScreenshot", {
+          format: "png",
+          fromSurface: true,
+          captureBeyondViewport: false,
+          clip: {
+            x: video.x,
+            y: video.y,
+            width: video.width,
+            height: video.height,
+            scale: 1
+          }
+        });
+
+        if (screenshot?.data) {
+          frames.push({ index: video.index, data: screenshot.data });
+        }
+      } catch {
+        // The content script's current-frame/poster fallback handles this video.
+      }
+    }
+
+    return frames;
+  } finally {
+    await requestTab(tabId, { type: "PVC_EXIT_VIDEO_CAPTURE_MODE" }).catch(() => {});
+  }
 }
 
 // Chromium's debugger API expects separate keyDown and keyUp events for reliable navigation.

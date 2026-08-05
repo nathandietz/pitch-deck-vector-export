@@ -7,6 +7,8 @@
   const TARGET_ASPECT_RATIO = 16 / 9;
   const PAGE_WIDTH_INCHES = 16;
   const PAGE_HEIGHT_INCHES = 9;
+  const VIDEO_FRAME_DELAY_MS = 100;
+  const STATIC_SLIDE_DELAY_MS = 500;
 
   // Content-script state lives only in the current Pitch tab.
   // Captured slide clones are stored here until the background worker asks the page to print.
@@ -16,7 +18,9 @@
     styleNode: null,
     previousTitle: "",
     pageWidth: PAGE_WIDTH_INCHES,
-    pageHeight: PAGE_HEIGHT_INCHES
+    pageHeight: PAGE_HEIGHT_INCHES,
+    videoCaptureStyle: null,
+    videoCaptureTarget: null
   };
 
   // The background worker sends simple commands; each command returns a small serializable result.
@@ -41,6 +45,11 @@
         return captureCurrentSlide(message.videoFrames || []);
       case "PVC_GET_VIDEO_RECTS":
         return getVideoRects();
+      case "PVC_ENTER_VIDEO_CAPTURE_MODE":
+        return enterVideoCaptureMode();
+      case "PVC_EXIT_VIDEO_CAPTURE_MODE":
+        exitVideoCaptureMode();
+        return { ok: true };
       case "PVC_WAIT_FOR_ANIMATIONS":
         return waitForSlideAnimations(message.maxWaitMs);
       case "PVC_ENTER_PRINT_MODE":
@@ -60,21 +69,14 @@
     const startedAt = performance.now();
     const stage = document.querySelector("[data-test-id='current-visible-slide'], #current-visible-slide");
     const hasVideo = Boolean(stage?.querySelector("video"));
-    const hasAnimatedGif = containsAnimatedGif(stage);
     const initialAnimations = getActiveFiniteAnimations(stage);
 
-    // Video frames are captured separately from the live page. If the slide has no CSS
-    // transition to wait for, capture that frame immediately instead of consuming the
-    // fallback/max delay intended for GIF playback or unresolved transitions.
-    if (hasVideo && !initialAnimations.length) {
-      return { waitedMs: 0, sawAnimation: false, hasAnimatedMedia: true };
-    }
-
-    // GIF playback is independent of CSS/Web Animations and has no browser-level
-    // "finished" signal. Give it the complete configured window before capturing.
-    if (hasAnimatedGif && !hasVideo) {
-      await sleep(timeoutMs);
-      return { waitedMs: timeoutMs, sawAnimation: false, hasAnimatedMedia: true };
+    // Keep static-slide navigation from feeling abrupt. Videos use their own short frame
+    // delay below, while CSS transitions go through the stability loop.
+    if (!initialAnimations.length) {
+      const delay = hasVideo ? VIDEO_FRAME_DELAY_MS : STATIC_SLIDE_DELAY_MS;
+      await sleep(delay);
+      return { waitedMs: delay, sawAnimation: false, hasVideo };
     }
 
     let sawAnimation = false;
@@ -112,26 +114,8 @@
     return {
       waitedMs: Math.round(performance.now() - startedAt),
       sawAnimation,
-      hasAnimatedMedia: false
+      hasVideo
     };
-  }
-
-  function containsAnimatedGif(root) {
-    if (!root) {
-      return false;
-    }
-
-    const imageSources = [...root.querySelectorAll("img, source")];
-    if (imageSources.some((element) => {
-      const source = element.currentSrc || element.src || element.getAttribute("src") || "";
-      return /\.gif(?:[?#]|$)/i.test(source);
-    })) {
-      return true;
-    }
-
-    return [root, ...root.querySelectorAll("*")].some((element) =>
-      /url\([^)]*\.gif(?:[?#][^)]*)?\)/i.test(getComputedStyle(element).backgroundImage || "")
-    );
   }
 
   function getActiveFiniteAnimations(root) {
@@ -176,6 +160,7 @@
 
   // Start every export from a clean slate, including any previous temporary print DOM.
   function resetCapture() {
+    exitVideoCaptureMode();
     exitPrintMode();
     state.slides = [];
     state.pageWidth = PAGE_WIDTH_INCHES;
@@ -299,6 +284,35 @@
         height: Math.max(0, bottom - top)
       };
     }).filter((rect) => rect.width > 1 && rect.height > 1);
+  }
+
+  // Temporarily hide overlays so a screenshot of a full-slide background video contains
+  // only video pixels. The live slide is restored before it is cloned for printing.
+  function enterVideoCaptureMode() {
+    exitVideoCaptureMode();
+    const slide = findCurrentSlide();
+    if (!slide) {
+      return { videoCount: 0 };
+    }
+
+    const style = document.createElement("style");
+    style.textContent = `
+      .pitch-vector-video-isolation * { visibility: hidden !important; }
+      .pitch-vector-video-isolation video { visibility: visible !important; }
+    `;
+    document.documentElement.append(style);
+    slide.element.classList.add("pitch-vector-video-isolation");
+    state.videoCaptureStyle = style;
+    state.videoCaptureTarget = slide.element;
+
+    return { videoCount: slide.element.querySelectorAll("video").length };
+  }
+
+  function exitVideoCaptureMode() {
+    state.videoCaptureTarget?.classList.remove("pitch-vector-video-isolation");
+    state.videoCaptureStyle?.remove();
+    state.videoCaptureTarget = null;
+    state.videoCaptureStyle = null;
   }
 
   async function captureCurrentSlide(videoFrames) {
