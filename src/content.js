@@ -48,8 +48,11 @@
     "box-shadow",
     "box-sizing",
     "color",
+    "clip-path",
     "display",
     "filter",
+    "fill",
+    "fill-opacity",
     "flex",
     "flex-direction",
     "font",
@@ -72,12 +75,20 @@
     "overflow",
     "padding",
     "position",
+    "stroke",
+    "stroke-dasharray",
+    "stroke-dashoffset",
+    "stroke-linecap",
+    "stroke-linejoin",
+    "stroke-opacity",
+    "stroke-width",
     "text-align",
     "text-decoration",
     "text-shadow",
     "text-transform",
     "transform",
     "transform-origin",
+    "vector-effect",
     "white-space",
     "width",
     "word-break",
@@ -664,8 +675,8 @@
     copyVideoFrames(source, clone, videoFrames);
     inlineComputedStyles(source, clone);
     normalizePitchPrecisionClone(source, clone, rect);
+    namespaceCloneIds(clone, `pitch-vector-page-${state.slides.length + 1}`);
 
-    clone.removeAttribute("id");
     clone.style.boxSizing = "border-box";
     clone.style.position = "relative";
     clone.style.left = "auto";
@@ -711,6 +722,53 @@
       width: crop.width,
       height: crop.height
     };
+  }
+
+  // Captured builds can reuse the same SVG IDs. Namespace every cloned ID and its
+  // local references so clip paths, masks, filters, gradients, and <use> nodes stay
+  // scoped to the page they came from in the combined print document.
+  function namespaceCloneIds(root, prefix) {
+    const elements = [root, ...root.querySelectorAll("*")];
+    const idMap = new Map();
+    let nextId = 1;
+
+    for (const element of elements) {
+      const originalId = element.getAttribute?.("id");
+      if (!originalId) {
+        continue;
+      }
+
+      const namespacedId = `${prefix}-${nextId}`;
+      nextId += 1;
+      idMap.set(originalId, namespacedId);
+      element.setAttribute("id", namespacedId);
+    }
+
+    if (!idMap.size) {
+      return;
+    }
+
+    for (const element of elements) {
+      for (const attribute of [...(element.attributes || [])]) {
+        attribute.value = rewriteIdReferences(attribute.value, idMap);
+      }
+
+      if (element instanceof HTMLStyleElement) {
+        element.textContent = rewriteIdReferences(element.textContent || "", idMap);
+      }
+    }
+  }
+
+  function rewriteIdReferences(value, idMap) {
+    let rewritten = value;
+    for (const [originalId, namespacedId] of idMap) {
+      const escapedId = originalId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      rewritten = rewritten.replace(
+        new RegExp(`#${escapedId}(?![\\w-])`, "g"),
+        `#${namespacedId}`
+      );
+    }
+    return rewritten;
   }
 
   // Convert Pitch's responsive wrapper back into its fixed slide coordinate system. The printed
