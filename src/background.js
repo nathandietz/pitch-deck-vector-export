@@ -7,19 +7,57 @@ const MAX_CAPTURE_STATES = 1000;
 const MIN_MOVE_DELAY_MS = 100;
 const MAX_MOVE_DELAY_MS = 10000;
 
+// Popup pages are short-lived, so the background worker owns export state. The worker stays
+// alive for the duration of the async export and can hand the latest state to a newly opened popup.
+const exportJobs = new Map();
+
 // Route popup requests to the small background actions that need extension-only permissions.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === "GET_ACTIVE_PITCH_TAB_INFO") {
     getPitchTabInfo(message.tabId)
-      .then((result) => sendResponse({ ok: true, ...result }))
+      .then((result) => sendResponse({
+        ok: true,
+        ...result,
+        exportState: exportJobs.get(message.tabId) || null
+      }))
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
 
   if (message?.type === "EXPORT_ACTIVE_PITCH_TAB") {
+    const existingJob = exportJobs.get(message.tabId);
+    if (existingJob?.phase === "running") {
+      sendResponse({ ok: false, error: "An export is already in progress for this deck." });
+      return false;
+    }
+
+    setExportJob(message.tabId, {
+      phase: "running",
+      tone: "busy",
+      status: "Preparing export...",
+      startSlide: message.startSlide,
+      endSlide: message.endSlide,
+      moveDelayMs: message.moveDelayMs
+    });
+
     exportPitchTab(message.tabId, message.startSlide, message.endSlide, message.moveDelayMs)
-      .then((result) => sendResponse({ ok: true, ...result }))
-      .catch((error) => sendResponse({ ok: false, error: error.message }));
+      .then((result) => {
+        setExportJob(message.tabId, {
+          phase: "complete",
+          tone: "success",
+          status: `Saved slides ${result.startSlide}-${result.endSlide} to Downloads.`,
+          ...result
+        });
+        sendResponse({ ok: true, ...result });
+      })
+      .catch((error) => {
+        setExportJob(message.tabId, {
+          phase: "error",
+          tone: "error",
+          status: error.message
+        });
+        sendResponse({ ok: false, error: error.message });
+      });
     return true;
   }
 
@@ -51,17 +89,18 @@ async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs) {
   const rangeStart = clampInteger(startSlide, 1, totalSlides, 1);
   const rangeEnd = clampInteger(endSlide, rangeStart, totalSlides, totalSlides);
   const moveDelay = clampInteger(moveDelayMs, MIN_MOVE_DELAY_MS, MAX_MOVE_DELAY_MS, ADVANCE_SETTLE_MS);
-
   const target = { tabId };
   let attached = false;
 
   try {
+    await notifyExportStatus(tabId, "Preparing capture...");
     await chrome.debugger.attach(target, DEBUGGER_VERSION);
     attached = true;
     await chrome.debugger.sendCommand(target, "Page.enable");
     await clickDeck(target);
 
     await requestTab(tabId, { type: "PVC_RESET_CAPTURE" });
+    await notifyExportStatus(tabId, `Moving to start slide ${rangeStart} of ${totalSlides}...`);
     await navigateToSlide(tabId, target, rangeStart, totalSlides, moveDelay);
 
     let slideCount = 0;
@@ -75,6 +114,10 @@ async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs) {
         break;
       }
 
+      await notifyExportStatus(
+        tabId,
+        `Capturing slide ${currentInfo.currentSlide} of ${rangeEnd}...`
+      );
       const capture = await requestTab(tabId, { type: "PVC_CAPTURE_CURRENT" });
       slideCount = capture.slideCount;
       captureStates += 1;
@@ -106,9 +149,10 @@ async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs) {
       throw new Error("Could not find the slide surface on this Pitch page.");
     }
 
-    await notifyExportStatus(tabId, "Saving PDF...");
+    await notifyExportStatus(tabId, "Preparing PDF layout...");
 
     const printSetup = await requestTab(tabId, { type: "PVC_ENTER_PRINT_MODE" });
+    await notifyExportStatus(tabId, "Generating PDF...");
     const pdf = await chrome.debugger.sendCommand(target, "Page.printToPDF", {
       displayHeaderFooter: false,
       printBackground: true,
@@ -130,6 +174,7 @@ async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs) {
     }
 
     const filename = makeFilename(tab.title || "pitch-deck", rangeStart, rangeEnd, totalSlides);
+    await notifyExportStatus(tabId, "Downloading PDF...");
     await chrome.downloads.download({
       url: `data:application/pdf;base64,${pdf.data}`,
       filename,
@@ -250,11 +295,20 @@ async function requestTab(tabId, message) {
 
 // Progress messages are best-effort; the export should keep going if the popup closes.
 async function notifyExportStatus(tabId, status) {
+  setExportJob(tabId, { status, tone: "busy", phase: "running" });
   await chrome.runtime.sendMessage({
     type: "EXPORT_STATUS",
     tabId,
     status
   }).catch(() => {});
+}
+
+function setExportJob(tabId, patch) {
+  exportJobs.set(tabId, {
+    ...(exportJobs.get(tabId) || {}),
+    ...patch,
+    updatedAt: Date.now()
+  });
 }
 
 // Small delay helper for Pitch animations and slide state updates.

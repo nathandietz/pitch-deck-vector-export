@@ -94,6 +94,7 @@ async function getActivePitchTab() {
 async function loadDeckInfo() {
   setBusy(true);
   setStatus("Reading deck length...", "busy");
+  let exportState = null;
 
   try {
     const tab = await getActivePitchTab();
@@ -113,19 +114,31 @@ async function loadDeckInfo() {
     endSlideInput.value = String(deckSlideCount);
     startSlideInput.max = String(deckSlideCount);
     endSlideInput.max = String(deckSlideCount);
-    updateReadyStatus(true);
+    exportState = response.exportState;
+
+    if (exportState) {
+      if (exportState.startSlide != null) {
+        startSlideInput.value = String(exportState.startSlide);
+      }
+      if (exportState.endSlide != null) {
+        endSlideInput.value = String(exportState.endSlide);
+      }
+      setStatus(exportState.status, exportState.tone || "info");
+    } else {
+      updateReadyStatus(true);
+    }
   } catch (error) {
     activePitchTabId = null;
     deckSlideCount = null;
     setStatus(error.message, "warning");
   } finally {
-    setBusy(false);
+    setBusy(exportState?.phase === "running");
   }
 }
 
 exportButton.addEventListener("click", async () => {
   setBusy(true);
-  setStatus("Capturing slides...", "busy");
+  setStatus("Preparing export...", "busy");
 
   try {
     const tab = activePitchTabId ? await chrome.tabs.get(activePitchTabId) : await getActivePitchTab();
