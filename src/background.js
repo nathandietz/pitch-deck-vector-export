@@ -1,8 +1,9 @@
 import { isSupportedPitchDeckUrl } from "./shared.js";
 
 const DEBUGGER_VERSION = "1.3";
-const ADVANCE_SETTLE_MS = 3000;
+const DEFAULT_PAGE_DELAY_MS = 1000;
 const BACKWARD_NAVIGATION_SETTLE_MS = 250;
+const VIDEO_FRAME_CAPTURE_MS = 100;
 const MAX_CAPTURE_STATES = 1000;
 const MIN_MOVE_DELAY_MS = 100;
 const MAX_MOVE_DELAY_MS = 10000;
@@ -95,7 +96,7 @@ async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs, automati
   const totalSlides = deckInfo.totalSlides;
   const rangeStart = clampInteger(startSlide, 1, totalSlides, 1);
   const rangeEnd = clampInteger(endSlide, rangeStart, totalSlides, totalSlides);
-  const moveDelay = clampInteger(moveDelayMs, MIN_MOVE_DELAY_MS, MAX_MOVE_DELAY_MS, ADVANCE_SETTLE_MS);
+  const moveDelay = clampInteger(moveDelayMs, MIN_MOVE_DELAY_MS, MAX_MOVE_DELAY_MS, DEFAULT_PAGE_DELAY_MS);
   const target = { tabId };
   let attached = false;
 
@@ -109,7 +110,9 @@ async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs, automati
     await requestTab(tabId, { type: "PVC_RESET_CAPTURE" });
     await notifyExportStatus(tabId, `Moving to start slide ${rangeStart} of ${totalSlides}...`);
     await navigateToSlide(tabId, target, rangeStart, totalSlides, moveDelay, automaticDelay);
+    let videoFramesPromise = captureVisibleVideoFrames(tabId, target);
     await waitForSlideSettled(tabId, moveDelay, automaticDelay);
+    let videoFrames = await videoFramesPromise;
 
     let slideCount = 0;
     let captureStates = 0;
@@ -126,7 +129,6 @@ async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs, automati
         tabId,
         `Capturing slide ${currentInfo.currentSlide} of ${rangeEnd}...`
       );
-      const videoFrames = await captureVisibleVideoFrames(tabId, target);
       const capture = await requestTab(tabId, {
         type: "PVC_CAPTURE_CURRENT",
         videoFrames
@@ -135,7 +137,9 @@ async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs, automati
       captureStates += 1;
 
       await advanceSlide(target);
+      videoFramesPromise = captureVisibleVideoFrames(tabId, target);
       await waitForSlideSettled(tabId, moveDelay, automaticDelay);
+      videoFrames = await videoFramesPromise;
 
       const nextInfo = await requestTab(tabId, { type: "PVC_GET_DECK_INFO" });
       if (nextInfo.currentSlide > rangeEnd) {
@@ -264,7 +268,7 @@ async function navigateToSlide(
   target,
   slideNumber,
   totalSlides,
-  forwardSettleMs = ADVANCE_SETTLE_MS,
+  forwardSettleMs = DEFAULT_PAGE_DELAY_MS,
   automaticDelay = false
 ) {
   for (let attempt = 0; attempt <= totalSlides + 2; attempt += 1) {
@@ -313,7 +317,7 @@ async function captureVisibleVideoFrames(tabId, target) {
   }
 
   try {
-    await sleep(100);
+    await sleep(VIDEO_FRAME_CAPTURE_MS);
     const videos = await requestTab(tabId, { type: "PVC_GET_VIDEO_RECTS" });
     const frames = [];
 

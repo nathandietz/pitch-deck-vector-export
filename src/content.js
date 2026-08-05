@@ -7,8 +7,9 @@
   const TARGET_ASPECT_RATIO = 16 / 9;
   const PAGE_WIDTH_INCHES = 16;
   const PAGE_HEIGHT_INCHES = 9;
-  const VIDEO_FRAME_DELAY_MS = 100;
-  const STATIC_SLIDE_DELAY_MS = 500;
+  const DEFAULT_PAGE_DELAY_MS = 1000;
+  const CSS_TRANSITION_DELAY_MS = 1000;
+  const VIDEO_FRAME_DELAY_MS = 1000;
 
   // Content-script state lives only in the current Pitch tab.
   // Captured slide clones are stored here until the background worker asks the page to print.
@@ -65,7 +66,8 @@
   // Wait for finite CSS/Web Animations on the visible slide. The timeout protects the
   // exporter from looping animations or animations Pitch leaves unresolved.
   async function waitForSlideAnimations(maxWaitMs) {
-    const timeoutMs = Math.max(100, Number.parseInt(maxWaitMs, 10) || 1000);
+    const configuredDelayMs = Math.max(100, Number.parseInt(maxWaitMs, 10) || DEFAULT_PAGE_DELAY_MS);
+    const safetyTimeoutMs = Math.max(30000, configuredDelayMs);
     const startedAt = performance.now();
     const stage = document.querySelector("[data-test-id='current-visible-slide'], #current-visible-slide");
     const hasVideo = Boolean(stage?.querySelector("video"));
@@ -74,7 +76,7 @@
     // Keep static-slide navigation from feeling abrupt. Videos use their own short frame
     // delay below, while CSS transitions go through the stability loop.
     if (!initialAnimations.length) {
-      const delay = hasVideo ? VIDEO_FRAME_DELAY_MS : STATIC_SLIDE_DELAY_MS;
+      const delay = hasVideo ? VIDEO_FRAME_DELAY_MS : DEFAULT_PAGE_DELAY_MS;
       await sleep(delay);
       return { waitedMs: delay, sawAnimation: false, hasVideo };
     }
@@ -82,10 +84,10 @@
     let sawAnimation = false;
     let previousVisualKey = null;
     let stableSince = startedAt;
-    const minimumObservationMs = Math.min(180, timeoutMs);
+    const minimumObservationMs = CSS_TRANSITION_DELAY_MS;
     const stableWindowMs = 100;
 
-    while (performance.now() - startedAt < timeoutMs) {
+    while (performance.now() - startedAt < safetyTimeoutMs) {
       const animations = getActiveFiniteAnimations(stage);
       if (animations.length) {
         sawAnimation = true;
