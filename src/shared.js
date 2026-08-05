@@ -1,5 +1,23 @@
-// Shared rules used by the popup and background worker.
-// Keeping the supported URL check in one place prevents the two entry points from drifting apart.
+export const RUNTIME_MESSAGE = Object.freeze({
+  GET_DECK_INFO: "GET_ACTIVE_PITCH_TAB_INFO",
+  START_EXPORT: "EXPORT_ACTIVE_PITCH_TAB",
+  EXPORT_STATUS: "EXPORT_STATUS"
+});
+
+export const CONTENT_MESSAGE = Object.freeze({
+  PING: "PVC_PING",
+  RESET_CAPTURE: "PVC_RESET_CAPTURE",
+  GET_DECK_INFO: "PVC_GET_DECK_INFO",
+  CAPTURE_CURRENT: "PVC_CAPTURE_CURRENT",
+  GET_VIDEO_RECTS: "PVC_GET_VIDEO_RECTS",
+  ENTER_VIDEO_CAPTURE_MODE: "PVC_ENTER_VIDEO_CAPTURE_MODE",
+  EXIT_VIDEO_CAPTURE_MODE: "PVC_EXIT_VIDEO_CAPTURE_MODE",
+  WAIT_FOR_ANIMATIONS: "PVC_WAIT_FOR_ANIMATIONS",
+  WAIT_FOR_VIDEOS: "PVC_WAIT_FOR_VIDEOS",
+  ENTER_PRINT_MODE: "PVC_ENTER_PRINT_MODE",
+  EXIT_PRINT_MODE: "PVC_EXIT_PRINT_MODE"
+});
+
 export function isSupportedPitchDeckUrl(url) {
   return /^https:\/\/pitch\.com\/(?:v|embed|public)\//.test(url || "");
 }

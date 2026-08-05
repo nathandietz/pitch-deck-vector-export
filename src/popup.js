@@ -1,4 +1,5 @@
-import { isSupportedPitchDeckUrl } from "./shared.js";
+import { parseMoveDelay, parseSlideRange } from "./popup-form.js";
+import { isSupportedPitchDeckUrl, RUNTIME_MESSAGE } from "./shared.js";
 
 const exportButton = document.querySelector("#exportButton");
 const startSlideInput = document.querySelector("#startSlide");
@@ -30,24 +31,7 @@ function setStatus(message, tone = "info") {
 
 // Read and validate the user's requested range once, then reuse the same result everywhere.
 function getSelectedSlideRange() {
-  const startSlide = Number.parseInt(startSlideInput.value, 10);
-  const endSlide = Number.parseInt(endSlideInput.value, 10);
-
-  if (!Number.isFinite(startSlide) || !Number.isFinite(endSlide)) {
-    return { error: "Enter a numeric start and end slide." };
-  }
-  if (startSlide < 1 || endSlide < startSlide) {
-    return { error: "Use a valid slide range, like 1-9." };
-  }
-  if (deckSlideCount && endSlide > deckSlideCount) {
-    return { error: `End slide cannot be greater than ${deckSlideCount}.` };
-  }
-
-  return {
-    startSlide,
-    endSlide,
-    slideCount: endSlide - startSlide + 1
-  };
+  return parseSlideRange(startSlideInput.value, endSlideInput.value, deckSlideCount);
 }
 
 function getSelectedSlideCount() {
@@ -56,15 +40,6 @@ function getSelectedSlideCount() {
     return null;
   }
   return range.slideCount;
-}
-
-function getMoveDelayMs() {
-  const moveDelaySeconds = Number.parseFloat(moveDelayInput.value);
-  if (!Number.isFinite(moveDelaySeconds) || moveDelaySeconds < 0.1 || moveDelaySeconds > 10) {
-    return { error: "Move delay must be between 0.1 and 10 seconds." };
-  }
-
-  return { moveDelayMs: Math.round(moveDelaySeconds * 1000) };
 }
 
 // Keep the ready message in sync as the user edits the slide range.
@@ -103,7 +78,7 @@ async function loadDeckInfo() {
     activePitchTabId = tab.id;
 
     const response = await chrome.runtime.sendMessage({
-      type: "GET_ACTIVE_PITCH_TAB_INFO",
+      type: RUNTIME_MESSAGE.GET_DECK_INFO,
       tabId: tab.id
     });
 
@@ -150,13 +125,13 @@ exportButton.addEventListener("click", async () => {
     if (range.error) {
       throw new Error(range.error);
     }
-    const moveDelay = getMoveDelayMs();
+    const moveDelay = parseMoveDelay(moveDelayInput.value);
     if (moveDelay.error) {
       throw new Error(moveDelay.error);
     }
 
     const response = await chrome.runtime.sendMessage({
-      type: "EXPORT_ACTIVE_PITCH_TAB",
+      type: RUNTIME_MESSAGE.START_EXPORT,
       tabId: tab.id,
       startSlide: range.startSlide,
       endSlide: range.endSlide,
@@ -186,7 +161,7 @@ document.addEventListener("keydown", (event) => {
 
 // The background worker streams progress back while it captures and prints the deck.
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "EXPORT_STATUS" && message.tabId === activePitchTabId) {
+  if (message?.type === RUNTIME_MESSAGE.EXPORT_STATUS && message.tabId === activePitchTabId) {
     setStatus(message.status, "busy");
   }
 });

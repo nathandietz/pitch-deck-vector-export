@@ -31,15 +31,36 @@ This Microsoft Edge extension exports any public Pitch.com presentations as a mu
 
 1. Open a public Pitch presentation
     - *Example Deck: https://pitch.com/embed/294e8140-5131-4c7a-83e8-98b20d124b9b/*
-3. Click the **Pitch Export** extension icon.
-4. Leave **Start** at `1` and **End** at the detected slide count, or choose the slide range you want to export.
-5. Click **Export PDF**.
+2. Click the **Pitch Export** extension icon.
+3. Leave **Start** at `1` and **End** at the detected slide count, or choose the slide range you want to export.
+4. Click **Export PDF**.
 
 During export, Edge displays a debugger notification because the extension uses Chromium's `Page.printToPDF` API through the `debugger` permission. When the export finishes, the PDF is downloaded using the browser's normal download flow.
 
 ## Notes
+
 - Works with public Pitch presentations under `/v/`, `/public/`, or `/embed/`.
 - Automatically detects the total number of slides and defaults to exporting the entire presentation.
 - Navigates to the requested starting slide before exporting.
 - If Pitch changes its viewer implementation, the extension's DOM selectors may need to be updated.
 - Vector output depends on how Pitch renders each slide. If a slide is rendered as a bitmap or canvas, that content will remain rasterized because the browser cannot reconstruct vector graphics or selectable text from pixels.
+
+## Code structure
+
+- `src/background.js` receives popup requests and owns export progress.
+- `src/exporter.js` orchestrates navigation, capture, PDF generation, and download.
+- `src/content.js` adapts Pitch's rendered page into printable slide clones.
+- `src/popup.js` manages the popup UI; `src/popup-form.js` contains its validation rules.
+- `src/shared.js` contains the cross-context URL and message protocol.
+
+The project has no runtime dependencies. Run the unit tests with:
+
+```sh
+npm test
+```
+
+Build the Edge package with:
+
+```sh
+./scripts/build-edge-package.sh
+```

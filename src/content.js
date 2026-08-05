@@ -10,6 +10,79 @@
   const DEFAULT_PAGE_DELAY_MS = 1000;
   const CSS_TRANSITION_DELAY_MS = 1000;
   const VIDEO_FRAME_DELAY_MS = 1000;
+  const VIDEO_READY_TIMEOUT_MS = 5000;
+  const SELECTOR = Object.freeze({
+    stage: "[data-test-id='current-visible-slide'], #current-visible-slide",
+    activeSlide:
+      "[data-test-id='current-visible-slide'] .slide[data-slide-index], " +
+      "#current-visible-slide .slide[data-slide-index]",
+    slideCount:
+      ".player-v2-chrome-controls-slide-count, " +
+      "[data-test-id='player-v2-chrome-controls-slide-count']"
+  });
+  // Manifest content scripts cannot use static ES module imports, so this mirrors
+  // CONTENT_MESSAGE in shared.js at the page-adapter boundary.
+  const MESSAGE = Object.freeze({
+    PING: "PVC_PING",
+    RESET_CAPTURE: "PVC_RESET_CAPTURE",
+    GET_DECK_INFO: "PVC_GET_DECK_INFO",
+    CAPTURE_CURRENT: "PVC_CAPTURE_CURRENT",
+    GET_VIDEO_RECTS: "PVC_GET_VIDEO_RECTS",
+    ENTER_VIDEO_CAPTURE_MODE: "PVC_ENTER_VIDEO_CAPTURE_MODE",
+    EXIT_VIDEO_CAPTURE_MODE: "PVC_EXIT_VIDEO_CAPTURE_MODE",
+    WAIT_FOR_ANIMATIONS: "PVC_WAIT_FOR_ANIMATIONS",
+    WAIT_FOR_VIDEOS: "PVC_WAIT_FOR_VIDEOS",
+    ENTER_PRINT_MODE: "PVC_ENTER_PRINT_MODE",
+    EXIT_PRINT_MODE: "PVC_EXIT_PRINT_MODE"
+  });
+  const PRESERVED_STYLE_PROPERTIES = Object.freeze([
+    "align-items",
+    "background",
+    "background-color",
+    "background-image",
+    "background-position",
+    "background-repeat",
+    "background-size",
+    "border",
+    "border-radius",
+    "box-shadow",
+    "box-sizing",
+    "color",
+    "display",
+    "filter",
+    "flex",
+    "flex-direction",
+    "font",
+    "font-family",
+    "font-feature-settings",
+    "font-kerning",
+    "font-size",
+    "font-stretch",
+    "font-style",
+    "font-variant",
+    "font-weight",
+    "gap",
+    "height",
+    "justify-content",
+    "letter-spacing",
+    "line-height",
+    "margin",
+    "object-fit",
+    "opacity",
+    "overflow",
+    "padding",
+    "position",
+    "text-align",
+    "text-decoration",
+    "text-shadow",
+    "text-transform",
+    "transform",
+    "transform-origin",
+    "white-space",
+    "width",
+    "word-break",
+    "z-index"
+  ]);
 
   // Content-script state lives only in the current Pitch tab.
   // Captured slide clones are stored here until the background worker asks the page to print.
@@ -35,27 +108,29 @@
   // Keep all message names in one switch so unsupported commands fail quietly.
   async function handleMessage(message) {
     switch (message?.type) {
-      case "PVC_PING":
+      case MESSAGE.PING:
         return { ok: true };
-      case "PVC_RESET_CAPTURE":
+      case MESSAGE.RESET_CAPTURE:
         resetCapture();
         return { ok: true };
-      case "PVC_GET_DECK_INFO":
+      case MESSAGE.GET_DECK_INFO:
         return getDeckInfo();
-      case "PVC_CAPTURE_CURRENT":
+      case MESSAGE.CAPTURE_CURRENT:
         return captureCurrentSlide(message.videoFrames || []);
-      case "PVC_GET_VIDEO_RECTS":
+      case MESSAGE.GET_VIDEO_RECTS:
         return getVideoRects();
-      case "PVC_ENTER_VIDEO_CAPTURE_MODE":
+      case MESSAGE.ENTER_VIDEO_CAPTURE_MODE:
         return enterVideoCaptureMode();
-      case "PVC_EXIT_VIDEO_CAPTURE_MODE":
+      case MESSAGE.EXIT_VIDEO_CAPTURE_MODE:
         exitVideoCaptureMode();
         return { ok: true };
-      case "PVC_WAIT_FOR_ANIMATIONS":
+      case MESSAGE.WAIT_FOR_ANIMATIONS:
         return waitForSlideAnimations(message.maxWaitMs);
-      case "PVC_ENTER_PRINT_MODE":
+      case MESSAGE.WAIT_FOR_VIDEOS:
+        return waitForReadyVideos(getStage(), 0);
+      case MESSAGE.ENTER_PRINT_MODE:
         return enterPrintMode();
-      case "PVC_EXIT_PRINT_MODE":
+      case MESSAGE.EXIT_PRINT_MODE:
         exitPrintMode();
         return { ok: true };
       default:
@@ -69,19 +144,10 @@
     const configuredDelayMs = Math.max(100, Number.parseInt(maxWaitMs, 10) || DEFAULT_PAGE_DELAY_MS);
     const safetyTimeoutMs = Math.max(30000, configuredDelayMs);
     const startedAt = performance.now();
-    const stage = document.querySelector("[data-test-id='current-visible-slide'], #current-visible-slide");
-    const hasVideo = Boolean(stage?.querySelector("video"));
+    const stage = getStage();
     const initialAnimations = getActiveFiniteAnimations(stage);
-
-    // Keep static-slide navigation from feeling abrupt. Videos use their own short frame
-    // delay below, while CSS transitions go through the stability loop.
-    if (!initialAnimations.length) {
-      const delay = hasVideo ? VIDEO_FRAME_DELAY_MS : DEFAULT_PAGE_DELAY_MS;
-      await sleep(delay);
-      return { waitedMs: delay, sawAnimation: false, hasVideo };
-    }
-
-    let sawAnimation = false;
+    let sawAnimation = initialAnimations.length > 0;
+    let sawVisualChange = false;
     let previousVisualKey = null;
     let stableSince = startedAt;
     const minimumObservationMs = CSS_TRANSITION_DELAY_MS;
@@ -96,6 +162,9 @@
       const visualKey = getVisualStateKey(stage);
       const now = performance.now();
       if (visualKey !== previousVisualKey) {
+        if (previousVisualKey !== null) {
+          sawVisualChange = true;
+        }
         previousVisualKey = visualKey;
         stableSince = now;
       }
@@ -113,11 +182,62 @@
       await sleep(50);
     }
 
+    // Some Pitch slides insert the video only after their entrance transition. Give that
+    // deferred element time to appear, then wait until it has decoded a drawable frame.
+    const video = await waitForReadyVideos(
+      stage,
+      sawAnimation || sawVisualChange ? VIDEO_FRAME_DELAY_MS : 0
+    );
+
     return {
       waitedMs: Math.round(performance.now() - startedAt),
       sawAnimation,
-      hasVideo
+      hasVideo: video.hasVideo,
+      videoReady: video.ready
     };
+  }
+
+  async function waitForReadyVideos(root, discoveryDelayMs) {
+    const startedAt = performance.now();
+
+    while (performance.now() - startedAt < VIDEO_READY_TIMEOUT_MS) {
+      const videos = getVisibleVideos(root);
+      if (videos.length > 0 && videos.every(isVideoReady)) {
+        return { hasVideo: true, ready: true };
+      }
+
+      if (videos.length === 0 && performance.now() - startedAt >= discoveryDelayMs) {
+        return { hasVideo: false, ready: true };
+      }
+
+      await sleep(50);
+    }
+
+    return {
+      hasVideo: getVisibleVideos(root).length > 0,
+      ready: false
+    };
+  }
+
+  function getVisibleVideos(root) {
+    if (!root) {
+      return [];
+    }
+
+    return [...root.querySelectorAll("video")].filter((video) => {
+      const rect = video.getBoundingClientRect();
+      const style = getComputedStyle(video);
+      return rect.width > 1 &&
+        rect.height > 1 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden";
+    });
+  }
+
+  function isVideoReady(video) {
+    return video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA &&
+      video.videoWidth > 0 &&
+      video.videoHeight > 0;
   }
 
   function getActiveFiniteAnimations(root) {
@@ -160,6 +280,14 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  function getStage() {
+    return document.querySelector(SELECTOR.stage);
+  }
+
+  function getActiveSlide() {
+    return document.querySelector(SELECTOR.activeSlide);
+  }
+
   // Start every export from a clean slate, including any previous temporary print DOM.
   function resetCapture() {
     exitVideoCaptureMode();
@@ -171,9 +299,7 @@
 
   // Read Pitch's own slide counter first, then use a DOM fallback if Pitch changes that control.
   function getDeckInfo() {
-    const slideCountElement = document.querySelector(
-      ".player-v2-chrome-controls-slide-count, [data-test-id='player-v2-chrome-controls-slide-count']"
-    );
+    const slideCountElement = document.querySelector(SELECTOR.slideCount);
     const slideCount = parseSlideCount(slideCountElement?.textContent || "", true);
     const currentSlide = getCurrentSlideNumber() || slideCount.currentSlide;
     const totalSlides = slideCount.totalSlides || findTotalSlidesFallback();
@@ -188,9 +314,7 @@
   // A Pitch build keeps the same slide index but changes the rendered slide DOM. Hash the
   // active slide so the background worker can distinguish a build from a no-op at the deck edge.
   function getCurrentSlideStateKey() {
-    const activeSlide = document.querySelector(
-      "[data-test-id='current-visible-slide'] .slide[data-slide-index], #current-visible-slide .slide[data-slide-index]"
-    );
+    const activeSlide = getActiveSlide();
     if (!activeSlide) {
       return null;
     }
@@ -209,9 +333,7 @@
 
   // Pitch marks the visible slide with a zero-based data attribute; convert it to user-facing numbering.
   function getCurrentSlideNumber() {
-    const activeSlide = document.querySelector(
-      "[data-test-id='current-visible-slide'] .slide[data-slide-index], #current-visible-slide .slide[data-slide-index]"
-    );
+    const activeSlide = getActiveSlide();
     const slideIndex = Number.parseInt(activeSlide?.getAttribute("data-slide-index") || "", 10);
     if (Number.isFinite(slideIndex)) {
       return slideIndex + 1;
@@ -283,9 +405,10 @@
         x: left,
         y: top,
         width: Math.max(0, right - left),
-        height: Math.max(0, bottom - top)
+        height: Math.max(0, bottom - top),
+        ready: isVideoReady(video)
       };
-    }).filter((rect) => rect.width > 1 && rect.height > 1);
+    }).filter((rect) => rect.width > 1 && rect.height > 1 && rect.ready);
   }
 
   // Temporarily hide overlays so a screenshot of a full-slide background video contains
@@ -385,7 +508,7 @@
   // The wrapper preserves the canvas coordinate system used by its inner slide elements;
   // its live viewport position is removed by normalizePitchPrecisionClone below.
   function findPitchSlideWrapper() {
-    const stage = document.querySelector('[data-test-id="current-visible-slide"], #current-visible-slide');
+    const stage = getStage();
     const root = stage || document;
     const precisionWrapper = findCanvasPrecisionWrapper(root);
 
@@ -658,56 +781,7 @@
   // Preserve the CSS properties that affect slide geometry, text, color, and visual effects.
   function copyComputedStyle(source, clone) {
     const computed = getComputedStyle(source);
-    const preserved = [
-      "align-items",
-      "background",
-      "background-color",
-      "background-image",
-      "background-position",
-      "background-repeat",
-      "background-size",
-      "border",
-      "border-radius",
-      "box-shadow",
-      "box-sizing",
-      "color",
-      "display",
-      "filter",
-      "flex",
-      "flex-direction",
-      "font",
-      "font-family",
-      "font-feature-settings",
-      "font-kerning",
-      "font-size",
-      "font-stretch",
-      "font-style",
-      "font-variant",
-      "font-weight",
-      "gap",
-      "height",
-      "justify-content",
-      "letter-spacing",
-      "line-height",
-      "margin",
-      "object-fit",
-      "opacity",
-      "overflow",
-      "padding",
-      "position",
-      "text-align",
-      "text-decoration",
-      "text-shadow",
-      "text-transform",
-      "transform",
-      "transform-origin",
-      "white-space",
-      "width",
-      "word-break",
-      "z-index"
-    ];
-
-    for (const property of preserved) {
+    for (const property of PRESERVED_STYLE_PROPERTIES) {
       clone.style.setProperty(property, computed.getPropertyValue(property), computed.getPropertyPriority(property));
     }
   }
