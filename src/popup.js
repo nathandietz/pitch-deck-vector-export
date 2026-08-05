@@ -3,6 +3,7 @@ import { isSupportedPitchDeckUrl } from "./shared.js";
 const exportButton = document.querySelector("#exportButton");
 const startSlideInput = document.querySelector("#startSlide");
 const endSlideInput = document.querySelector("#endSlide");
+const moveDelayInput = document.querySelector("#moveDelaySeconds");
 const statusNode = document.querySelector("#status");
 const statusMessageNode = statusNode.querySelector(".status-message");
 
@@ -15,6 +16,7 @@ function setBusy(isBusy) {
   exportButton.disabled = isBusy;
   startSlideInput.disabled = isBusy;
   endSlideInput.disabled = isBusy;
+  moveDelayInput.disabled = isBusy;
 }
 
 // The status node uses tone classes so the CSS can handle color and animation in one place.
@@ -52,6 +54,15 @@ function getSelectedSlideCount() {
     return null;
   }
   return range.slideCount;
+}
+
+function getMoveDelayMs() {
+  const moveDelaySeconds = Number.parseFloat(moveDelayInput.value);
+  if (!Number.isFinite(moveDelaySeconds) || moveDelaySeconds < 0.1 || moveDelaySeconds > 10) {
+    return { error: "Move delay must be between 0.1 and 10 seconds." };
+  }
+
+  return { moveDelayMs: Math.round(moveDelaySeconds * 1000) };
 }
 
 // Keep the ready message in sync as the user edits the slide range.
@@ -124,12 +135,17 @@ exportButton.addEventListener("click", async () => {
     if (range.error) {
       throw new Error(range.error);
     }
+    const moveDelay = getMoveDelayMs();
+    if (moveDelay.error) {
+      throw new Error(moveDelay.error);
+    }
 
     const response = await chrome.runtime.sendMessage({
       type: "EXPORT_ACTIVE_PITCH_TAB",
       tabId: tab.id,
       startSlide: range.startSlide,
-      endSlide: range.endSlide
+      endSlide: range.endSlide,
+      moveDelayMs: moveDelay.moveDelayMs
     });
 
     if (!response?.ok) {
@@ -161,5 +177,6 @@ chrome.runtime.onMessage.addListener((message) => {
 
 startSlideInput.addEventListener("input", updateReadyStatus);
 endSlideInput.addEventListener("input", updateReadyStatus);
+moveDelayInput.addEventListener("input", updateReadyStatus);
 
 document.addEventListener("DOMContentLoaded", loadDeckInfo);

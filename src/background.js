@@ -1,9 +1,11 @@
 import { isSupportedPitchDeckUrl } from "./shared.js";
 
 const DEBUGGER_VERSION = "1.3";
-const ADVANCE_SETTLE_MS = 850;
-const NAVIGATION_SETTLE_MS = 100;
+const ADVANCE_SETTLE_MS = 1000;
+const BACKWARD_NAVIGATION_SETTLE_MS = 250;
 const MAX_CAPTURE_STATES = 1000;
+const MIN_MOVE_DELAY_MS = 100;
+const MAX_MOVE_DELAY_MS = 10000;
 
 // Route popup requests to the small background actions that need extension-only permissions.
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -15,7 +17,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
 
   if (message?.type === "EXPORT_ACTIVE_PITCH_TAB") {
-    exportPitchTab(message.tabId, message.startSlide, message.endSlide)
+    exportPitchTab(message.tabId, message.startSlide, message.endSlide, message.moveDelayMs)
       .then((result) => sendResponse({ ok: true, ...result }))
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
@@ -36,7 +38,7 @@ async function getPitchTabInfo(tabId) {
 }
 
 // Capture the requested slide range, place the cloned slides into print mode, and download one PDF.
-async function exportPitchTab(tabId, startSlide, endSlide) {
+async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs) {
   const tab = await chrome.tabs.get(tabId);
   if (!isSupportedPitchDeckUrl(tab?.url)) {
     throw new Error("This extension only exports Pitch deck URLs at /v, /public, or /embed.");
@@ -48,6 +50,7 @@ async function exportPitchTab(tabId, startSlide, endSlide) {
   const totalSlides = deckInfo.totalSlides;
   const rangeStart = clampInteger(startSlide, 1, totalSlides, 1);
   const rangeEnd = clampInteger(endSlide, rangeStart, totalSlides, totalSlides);
+  const moveDelay = clampInteger(moveDelayMs, MIN_MOVE_DELAY_MS, MAX_MOVE_DELAY_MS, ADVANCE_SETTLE_MS);
 
   const target = { tabId };
   let attached = false;
@@ -59,7 +62,7 @@ async function exportPitchTab(tabId, startSlide, endSlide) {
     await clickDeck(target);
 
     await requestTab(tabId, { type: "PVC_RESET_CAPTURE" });
-    await navigateToSlide(tabId, target, rangeStart, totalSlides);
+    await navigateToSlide(tabId, target, rangeStart, totalSlides, moveDelay);
 
     let slideCount = 0;
     let captureStates = 0;
@@ -77,7 +80,7 @@ async function exportPitchTab(tabId, startSlide, endSlide) {
       captureStates += 1;
 
       await advanceSlide(target);
-      await sleep(ADVANCE_SETTLE_MS);
+      await sleep(moveDelay);
 
       const nextInfo = await requestTab(tabId, { type: "PVC_GET_DECK_INFO" });
       if (nextInfo.currentSlide > rangeEnd) {
@@ -199,7 +202,7 @@ async function retreatSlide(target) {
 }
 
 // Step one slide at a time until Pitch reports that the target slide is visible.
-async function navigateToSlide(tabId, target, slideNumber, totalSlides) {
+async function navigateToSlide(tabId, target, slideNumber, totalSlides, forwardSettleMs = ADVANCE_SETTLE_MS) {
   for (let attempt = 0; attempt <= totalSlides + 2; attempt += 1) {
     const deckInfo = await requestTab(tabId, { type: "PVC_GET_DECK_INFO" });
     const currentSlide = deckInfo.currentSlide;
@@ -214,11 +217,11 @@ async function navigateToSlide(tabId, target, slideNumber, totalSlides) {
 
     if (currentSlide < slideNumber) {
       await advanceSlide(target);
+      await sleep(forwardSettleMs);
     } else {
       await retreatSlide(target);
+      await sleep(BACKWARD_NAVIGATION_SETTLE_MS);
     }
-
-    await sleep(NAVIGATION_SETTLE_MS);
   }
 
   throw new Error(`Could not navigate to slide ${slideNumber}.`);
