@@ -379,7 +379,8 @@
 
   // Pitch currently renders the visible slide as:
   // current-visible-slide > slide-wrapper > canvas-precision-wrapper > scaled-canvas > slide.
-  // Capture the precision wrapper, but measure it in Pitch's fixed slide coordinate system.
+  // Clone the actual slide node rather than the outer responsive wrapper. The wrapper's
+  // layout position is relative to the live viewport and must not enter the print preview.
   function findPitchSlideWrapper() {
     const stage = document.querySelector('[data-test-id="current-visible-slide"], #current-visible-slide');
     const root = stage || document;
@@ -431,7 +432,7 @@
     }
 
     return {
-      element: wrapper,
+      element: activeSlide,
       rect: size
     };
   }
@@ -874,6 +875,7 @@
         #pitch-vector-capture-root {
           position: fixed !important;
           inset: 0 !important;
+          box-sizing: border-box !important;
           z-index: 2147483647 !important;
           overflow: auto !important;
           background: #1f2937 !important;
@@ -881,9 +883,10 @@
         }
 
         .pitch-vector-capture-page {
-          display: grid !important;
-          place-items: center !important;
-          width: min(90vw, ${state.pageWidth * 72}px) !important;
+          position: relative !important;
+          /* The frame scale uses 96 CSS pixels per inch. Keep the screen page in
+             that same coordinate system so the preview is not larger than its page. */
+          width: min(90vw, ${state.pageWidth * 96}px) !important;
           aspect-ratio: ${state.pageWidth} / ${state.pageHeight} !important;
           margin: 0 auto 24px !important;
           background: white !important;
@@ -891,7 +894,15 @@
         }
 
         .pitch-vector-capture-frame {
-          transform-origin: center center !important;
+          position: absolute !important;
+          left: 0 !important;
+          top: 0 !important;
+          transform-origin: left top !important;
+          overflow: hidden !important;
+        }
+
+        .pitch-vector-capture-frame {
+          box-sizing: border-box !important;
         }
       }
     `;
