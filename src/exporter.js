@@ -65,14 +65,21 @@ export async function exportPitchTab({
       moveDelay,
       overrideDelay
     );
-    if (!movedToStart) {
-      await waitForSlideSettled(tabId, moveDelay, overrideDelay);
-    }
     let videoFrames = await captureVisibleVideoFrames(
       tabId,
       target,
       overrideDelay ? moveDelay : VIDEO_FRAME_CAPTURE_MS
     );
+    if (!movedToStart) {
+      await waitForSlideSettled(tabId, moveDelay, overrideDelay);
+    }
+    if (!videoFrames.length) {
+      videoFrames = await captureVisibleVideoFrames(
+        tabId,
+        target,
+        overrideDelay ? moveDelay : VIDEO_FRAME_CAPTURE_MS
+      );
+    }
 
     let slideCount = 0;
     let captureStates = 0;
@@ -94,13 +101,21 @@ export async function exportPitchTab({
       captureStates += 1;
 
       await advanceSlide(target);
-      // Let CSS transitions finish and deferred videos paint before taking a screenshot.
-      await waitForSlideSettled(tabId, moveDelay, overrideDelay);
+      // Prefer the first drawable video frame, before the page-settle delay advances playback.
       videoFrames = await captureVisibleVideoFrames(
         tabId,
         target,
         overrideDelay ? moveDelay : VIDEO_FRAME_CAPTURE_MS
       );
+      await waitForSlideSettled(tabId, moveDelay, overrideDelay);
+      // Slides that insert or decode video after their transition get a settled-state retry.
+      if (!videoFrames.length) {
+        videoFrames = await captureVisibleVideoFrames(
+          tabId,
+          target,
+          overrideDelay ? moveDelay : VIDEO_FRAME_CAPTURE_MS
+        );
+      }
 
       const nextInfo = await requestTab(tabId, { type: CONTENT_MESSAGE.GET_DECK_INFO });
       if (nextInfo.currentSlide > rangeEnd) {

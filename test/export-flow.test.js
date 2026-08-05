@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { exportPitchTab } from "../src/exporter.js";
 import { CONTENT_MESSAGE } from "../src/shared.js";
 
-test("waits for the next slide to settle before capturing its video frames", async () => {
+test("captures video early and retries after settling when no frame is available", async () => {
   const events = [];
   const deckInfo = [
     { currentSlide: 24, totalSlides: 25, stateKey: "slide-24" },
@@ -67,11 +67,16 @@ test("waits for the next slide to settle before capturing its video frames", asy
   });
 
   const firstAdvance = events.indexOf("ArrowRight:keyUp");
-  const settle = events.indexOf(CONTENT_MESSAGE.WAIT_FOR_ANIMATIONS, firstAdvance);
-  const videoCapture = events.indexOf(CONTENT_MESSAGE.ENTER_VIDEO_CAPTURE_MODE, settle);
+  const earlyVideoCapture = events.indexOf(
+    CONTENT_MESSAGE.ENTER_VIDEO_CAPTURE_MODE,
+    firstAdvance
+  );
+  const settle = events.indexOf(CONTENT_MESSAGE.WAIT_FOR_ANIMATIONS, earlyVideoCapture);
+  const lateVideoCapture = events.indexOf(CONTENT_MESSAGE.ENTER_VIDEO_CAPTURE_MODE, settle);
 
   assert.ok(firstAdvance >= 0);
-  assert.ok(settle > firstAdvance);
-  assert.ok(videoCapture > settle);
+  assert.ok(earlyVideoCapture > firstAdvance);
+  assert.ok(settle > earlyVideoCapture);
+  assert.ok(lateVideoCapture > settle);
   assert.equal(capturedSlides, 2);
 });

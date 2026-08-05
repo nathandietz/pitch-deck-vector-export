@@ -9,7 +9,7 @@
   const PAGE_HEIGHT_INCHES = 9;
   const DEFAULT_PAGE_DELAY_MS = 1000;
   const CSS_TRANSITION_DELAY_MS = 1000;
-  const VIDEO_FRAME_DELAY_MS = 1000;
+  const VIDEO_FRAME_DELAY_MS = 100;
   const VIDEO_READY_TIMEOUT_MS = 5000;
   const SELECTOR = Object.freeze({
     stage: "[data-test-id='current-visible-slide'], #current-visible-slide",
@@ -94,7 +94,8 @@
     pageWidth: PAGE_WIDTH_INCHES,
     pageHeight: PAGE_HEIGHT_INCHES,
     videoCaptureStyle: null,
-    videoCaptureTarget: null
+    videoCaptureTarget: null,
+    videoCaptureVideos: []
   };
 
   // The background worker sends simple commands; each command returns a small serializable result.
@@ -395,6 +396,7 @@
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
     return [...slide.element.querySelectorAll("video")].map((video, index) => {
       const rect = video.getBoundingClientRect();
+      const style = getComputedStyle(video);
       const left = Math.max(0, rect.left);
       const top = Math.max(0, rect.top);
       const right = Math.min(viewportWidth, rect.right);
@@ -406,9 +408,10 @@
         y: top,
         width: Math.max(0, right - left),
         height: Math.max(0, bottom - top),
-        ready: isVideoReady(video)
+        ready: isVideoReady(video),
+        visible: style.display !== "none" && style.visibility !== "hidden"
       };
-    }).filter((rect) => rect.width > 1 && rect.height > 1 && rect.ready);
+    }).filter((rect) => rect.width > 1 && rect.height > 1 && rect.ready && rect.visible);
   }
 
   // Temporarily hide overlays so a screenshot of a full-slide background video contains
@@ -420,24 +423,40 @@
       return { videoCount: 0 };
     }
 
+    const visibleVideos = getVisibleVideos(slide.element);
+    if (!visibleVideos.length) {
+      return { videoCount: 0 };
+    }
+
+    for (const video of visibleVideos) {
+      video.classList.add("pitch-vector-video-capture-target");
+    }
+
     const style = document.createElement("style");
     style.textContent = `
       .pitch-vector-video-isolation * { visibility: hidden !important; }
-      .pitch-vector-video-isolation video { visibility: visible !important; }
+      .pitch-vector-video-isolation video.pitch-vector-video-capture-target {
+        visibility: visible !important;
+      }
     `;
     document.documentElement.append(style);
     slide.element.classList.add("pitch-vector-video-isolation");
     state.videoCaptureStyle = style;
     state.videoCaptureTarget = slide.element;
+    state.videoCaptureVideos = visibleVideos;
 
-    return { videoCount: slide.element.querySelectorAll("video").length };
+    return { videoCount: visibleVideos.length };
   }
 
   function exitVideoCaptureMode() {
+    for (const video of state.videoCaptureVideos) {
+      video.classList.remove("pitch-vector-video-capture-target");
+    }
     state.videoCaptureTarget?.classList.remove("pitch-vector-video-isolation");
     state.videoCaptureStyle?.remove();
     state.videoCaptureTarget = null;
     state.videoCaptureStyle = null;
+    state.videoCaptureVideos = [];
   }
 
   async function captureCurrentSlide(videoFrames) {
