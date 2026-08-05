@@ -39,7 +39,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       startSlide: message.startSlide,
       endSlide: message.endSlide,
       moveDelayMs: message.moveDelayMs,
-      automaticDelay: message.automaticDelay !== false
+      overrideDelay: message.overrideDelay === true
     });
 
     exportPitchTab(
@@ -47,7 +47,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       message.startSlide,
       message.endSlide,
       message.moveDelayMs,
-      message.automaticDelay !== false
+      message.overrideDelay === true
     )
       .then((result) => {
         setExportJob(message.tabId, {
@@ -84,7 +84,7 @@ async function getPitchTabInfo(tabId) {
 }
 
 // Capture the requested slide range, place the cloned slides into print mode, and download one PDF.
-async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs, automaticDelay = true) {
+async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs, overrideDelay = false) {
   const tab = await chrome.tabs.get(tabId);
   if (!isSupportedPitchDeckUrl(tab?.url)) {
     throw new Error("This extension only exports Pitch deck URLs at /v, /public, or /embed.");
@@ -109,9 +109,22 @@ async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs, automati
 
     await requestTab(tabId, { type: "PVC_RESET_CAPTURE" });
     await notifyExportStatus(tabId, `Moving to start slide ${rangeStart} of ${totalSlides}...`);
-    await navigateToSlide(tabId, target, rangeStart, totalSlides, moveDelay, automaticDelay);
-    let videoFramesPromise = captureVisibleVideoFrames(tabId, target);
-    await waitForSlideSettled(tabId, moveDelay, automaticDelay);
+    const movedToStart = await navigateToSlide(
+      tabId,
+      target,
+      rangeStart,
+      totalSlides,
+      moveDelay,
+      overrideDelay
+    );
+    let videoFramesPromise = captureVisibleVideoFrames(
+      tabId,
+      target,
+      overrideDelay ? moveDelay : VIDEO_FRAME_CAPTURE_MS
+    );
+    if (!movedToStart) {
+      await waitForSlideSettled(tabId, moveDelay, overrideDelay);
+    }
     let videoFrames = await videoFramesPromise;
 
     let slideCount = 0;
@@ -137,8 +150,12 @@ async function exportPitchTab(tabId, startSlide, endSlide, moveDelayMs, automati
       captureStates += 1;
 
       await advanceSlide(target);
-      videoFramesPromise = captureVisibleVideoFrames(tabId, target);
-      await waitForSlideSettled(tabId, moveDelay, automaticDelay);
+      videoFramesPromise = captureVisibleVideoFrames(
+        tabId,
+        target,
+        overrideDelay ? moveDelay : VIDEO_FRAME_CAPTURE_MS
+      );
+      await waitForSlideSettled(tabId, moveDelay, overrideDelay);
       videoFrames = await videoFramesPromise;
 
       const nextInfo = await requestTab(tabId, { type: "PVC_GET_DECK_INFO" });
@@ -269,14 +286,14 @@ async function navigateToSlide(
   slideNumber,
   totalSlides,
   forwardSettleMs = DEFAULT_PAGE_DELAY_MS,
-  automaticDelay = false
+  overrideDelay = false
 ) {
   for (let attempt = 0; attempt <= totalSlides + 2; attempt += 1) {
     const deckInfo = await requestTab(tabId, { type: "PVC_GET_DECK_INFO" });
     const currentSlide = deckInfo.currentSlide;
 
     if (currentSlide === slideNumber) {
-      return;
+      return attempt > 0;
     }
 
     if (!Number.isFinite(currentSlide)) {
@@ -285,31 +302,31 @@ async function navigateToSlide(
 
     if (currentSlide < slideNumber) {
       await advanceSlide(target);
-      await waitForSlideSettled(tabId, forwardSettleMs, automaticDelay);
+      await waitForSlideSettled(tabId, forwardSettleMs, overrideDelay);
     } else {
       await retreatSlide(target);
-      await sleep(BACKWARD_NAVIGATION_SETTLE_MS);
+      await sleep(overrideDelay ? forwardSettleMs : BACKWARD_NAVIGATION_SETTLE_MS);
     }
   }
 
   throw new Error(`Could not navigate to slide ${slideNumber}.`);
 }
 
-async function waitForSlideSettled(tabId, maxWaitMs, automaticDelay) {
-  if (!automaticDelay) {
-    await sleep(maxWaitMs);
+async function waitForSlideSettled(tabId, delayMs, overrideDelay) {
+  if (overrideDelay) {
+    await sleep(delayMs);
     return;
   }
 
   await requestTab(tabId, {
     type: "PVC_WAIT_FOR_ANIMATIONS",
-    maxWaitMs
+    maxWaitMs: delayMs
   });
 }
 
 // Capture only the live video rectangles. The rest of the slide continues through the
 // vector print pipeline, while these PNGs bypass media/CORS and cloned-video limitations.
-async function captureVisibleVideoFrames(tabId, target) {
+async function captureVisibleVideoFrames(tabId, target, captureDelayMs = VIDEO_FRAME_CAPTURE_MS) {
   const captureMode = await requestTab(tabId, { type: "PVC_ENTER_VIDEO_CAPTURE_MODE" });
   if (!captureMode?.videoCount) {
     await requestTab(tabId, { type: "PVC_EXIT_VIDEO_CAPTURE_MODE" }).catch(() => {});
@@ -317,7 +334,7 @@ async function captureVisibleVideoFrames(tabId, target) {
   }
 
   try {
-    await sleep(VIDEO_FRAME_CAPTURE_MS);
+    await sleep(captureDelayMs);
     const videos = await requestTab(tabId, { type: "PVC_GET_VIDEO_RECTS" });
     const frames = [];
 

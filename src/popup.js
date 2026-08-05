@@ -4,7 +4,7 @@ const exportButton = document.querySelector("#exportButton");
 const startSlideInput = document.querySelector("#startSlide");
 const endSlideInput = document.querySelector("#endSlide");
 const moveDelayInput = document.querySelector("#moveDelaySeconds");
-const automaticDelayInput = document.querySelector("#automaticDelay");
+const overrideDelayInput = document.querySelector("#overrideDelay");
 const statusNode = document.querySelector("#status");
 const statusMessageNode = statusNode.querySelector(".status-message");
 
@@ -18,7 +18,7 @@ function setBusy(isBusy) {
   startSlideInput.disabled = isBusy;
   endSlideInput.disabled = isBusy;
   moveDelayInput.disabled = isBusy;
-  automaticDelayInput.disabled = isBusy;
+  overrideDelayInput.disabled = isBusy;
 }
 
 // The status node uses tone classes so the CSS can handle color and animation in one place.
@@ -161,7 +161,7 @@ exportButton.addEventListener("click", async () => {
       startSlide: range.startSlide,
       endSlide: range.endSlide,
       moveDelayMs: moveDelay.moveDelayMs,
-      automaticDelay: automaticDelayInput.checked
+      overrideDelay: overrideDelayInput.checked
     });
 
     if (!response?.ok) {
