@@ -379,8 +379,9 @@
 
   // Pitch currently renders the visible slide as:
   // current-visible-slide > slide-wrapper > canvas-precision-wrapper > scaled-canvas > slide.
-  // Clone the actual slide node rather than the outer responsive wrapper. The wrapper's
-  // layout position is relative to the live viewport and must not enter the print preview.
+  // Capture the precision wrapper and measure it in Pitch's fixed slide coordinate system.
+  // The wrapper preserves the canvas coordinate system used by its inner slide elements;
+  // its live viewport position is removed by normalizePitchPrecisionClone below.
   function findPitchSlideWrapper() {
     const stage = document.querySelector('[data-test-id="current-visible-slide"], #current-visible-slide');
     const root = stage || document;
@@ -432,7 +433,7 @@
     }
 
     return {
-      element: activeSlide,
+      element: wrapper,
       rect: size
     };
   }
@@ -801,11 +802,16 @@
         (state.pageWidth * 96) / slide.width,
         (state.pageHeight * 96) / slide.height
       );
+      const screenScale = Math.min(
+        (state.pageWidth * 72) / slide.width,
+        (state.pageHeight * 72) / slide.height
+      );
       const frame = document.createElement("div");
       frame.className = "pitch-vector-capture-frame";
       frame.style.width = `${slide.width}px`;
       frame.style.height = `${slide.height}px`;
       frame.style.transform = `scale(${scale})`;
+      frame.style.setProperty("--screen-scale", screenScale);
       frame.style.transformOrigin = "left top";
       frame.append(slide.node.cloneNode(true));
 
@@ -886,7 +892,7 @@
           position: relative !important;
           /* The frame scale uses 96 CSS pixels per inch. Keep the screen page in
              that same coordinate system so the preview is not larger than its page. */
-          width: min(90vw, ${state.pageWidth * 96}px) !important;
+          width: min(90vw, ${state.pageWidth * 72}px) !important;
           aspect-ratio: ${state.pageWidth} / ${state.pageHeight} !important;
           margin: 0 auto 24px !important;
           background: white !important;
@@ -897,6 +903,7 @@
           position: absolute !important;
           left: 0 !important;
           top: 0 !important;
+          transform: scale(var(--screen-scale)) !important;
           transform-origin: left top !important;
           overflow: hidden !important;
         }
