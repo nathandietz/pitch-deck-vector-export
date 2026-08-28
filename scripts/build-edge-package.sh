@@ -3,7 +3,14 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST_DIR="$ROOT_DIR/dist"
-PACKAGE_NAME="pitch-deck-vector-export-edge.zip"
+VERSION="$(sed -nE 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$ROOT_DIR/manifest.json" | head -n 1)"
+
+if [[ -z "$VERSION" ]]; then
+  echo "Could not determine the extension version from manifest.json." >&2
+  exit 1
+fi
+
+PACKAGE_NAME="pitch-deck-vector-export-edge-v${VERSION}.zip"
 PACKAGE_PATH="$DIST_DIR/$PACKAGE_NAME"
 
 rm -rf "$DIST_DIR"
